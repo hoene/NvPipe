@@ -130,6 +130,14 @@ if (NVPIPE_BUILD_EXAMPLES)
         add_executable(nvpExampleMemory examples/memory.cpp)
         target_link_libraries(nvpExampleMemory PRIVATE ${PROJECT_NAME})
 
+        # Parallel encoding
+        add_executable(nvpExampleParallel examples/parallel.cpp)
+        target_link_libraries(nvpExampleParallel PRIVATE ${PROJECT_NAME})
+
+        # Parallel encoding in different threads
+        add_executable(nvpExampleFork examples/fork.cpp)
+        target_link_libraries(nvpExampleFork PRIVATE ${PROJECT_NAME})
+
         # Lossless test
         add_executable(nvpExampleLossless examples/lossless.cpp)
         target_link_libraries(nvpExampleLossless PRIVATE ${PROJECT_NAME})
