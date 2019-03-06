@@ -30,161 +30,203 @@
 #include "utils.h"
 
 #include <iostream>
-#include <vector>
+#include <sys/types.h>
 #include <sys/types.h>
 #include <sys/wait.h>
-#include <sys/types.h>
 #include <unistd.h>
+#include <vector>
 
 #include <cuda_runtime_api.h>
 
-void test(const char *prefix)
-{
-    std::cout << prefix << "NvPipe example application: Comparison of using host/device memory." << std::endl
+void test(const char *prefix) {
+  std::cout
+      << prefix
+      << "NvPipe example application: Comparison of using host/device memory."
+      << std::endl
+      << std::endl;
+
+  const uint32_t width = 3840;
+  const uint32_t height = 2160;
+
+  const NvPipe_Codec codec = NVPIPE_H264;
+  const NvPipe_Compression compression = NVPIPE_LOSSY;
+  const float bitrateMbps = 32;
+  const uint32_t targetFPS = 90;
+
+  std::cout << prefix << "Resolution: " << width << " x " << height
+            << std::endl;
+  std::cout << prefix << "Codec: " << (codec == NVPIPE_H264 ? "H.264" : "HEVC")
+            << std::endl;
+  if (compression == NVPIPE_LOSSY)
+    std::cout << prefix << "Bitrate: " << bitrateMbps << " Mbps @ " << targetFPS
+              << " Hz" << std::endl;
+
+  // Construct dummy frame
+  std::vector<uint8_t> rgba(width * height * 4);
+  for (uint32_t y = 0; y < height; ++y)
+    for (uint32_t x = 0; x < width; ++x)
+      rgba[4 * (y * width + x) + 1] =
+          (255.0f * x * y) / (width * height) * (y % 100 < 50);
+
+  std::cout << prefix << "Resolution: " << width << " x " << height
+            << std::endl;
+
+  std::vector<uint8_t> compressed(rgba.size());
+  std::vector<uint8_t> decompressed(rgba.size());
+
+  Timer timer;
+
+  // Host memory benchmark
+  {
+    std::cout << std::endl
+              << prefix
+              << "--- Encode from host memory / Decode to host memory ---"
+              << std::endl;
+    std::cout << prefix << "Frame | Encode (ms) | Decode (ms) | Size (KB)"
               << std::endl;
 
-    const uint32_t width = 3840;
-    const uint32_t height = 2160;
+    // Create encoder
+    NvPipe *encoder =
+        NvPipe_CreateEncoder(NVPIPE_BGRA32, codec, compression,
+                             bitrateMbps * 1000 * 1000, targetFPS);
+    if (!encoder)
+      std::cerr << prefix
+                << "Failed to create encoder: " << NvPipe_GetError(NULL)
+                << std::endl;
 
-    const NvPipe_Codec codec = NVPIPE_H264;
-    const NvPipe_Compression compression = NVPIPE_LOSSY;
-    const float bitrateMbps = 32;
-    const uint32_t targetFPS = 90;
+    // Create decoder
+    NvPipe *decoder = NvPipe_CreateDecoder(NVPIPE_BGRA32, codec);
+    if (!decoder)
+      std::cerr << prefix
+                << "Failed to create decoder: " << NvPipe_GetError(NULL)
+                << std::endl;
 
-    std::cout << prefix << "Resolution: " << width << " x " << height << std::endl;
-    std::cout << prefix << "Codec: " << (codec == NVPIPE_H264 ? "H.264" : "HEVC") << std::endl;
-    if (compression == NVPIPE_LOSSY)
-        std::cout << prefix << "Bitrate: " << bitrateMbps << " Mbps @ " << targetFPS << " Hz" << std::endl;
+    // A few frames ...
+    for (uint32_t i = 0; i < 10; ++i) {
+      // Encode
+      timer.reset();
+      uint64_t size =
+          NvPipe_Encode(encoder, rgba.data(), width * 4, compressed.data(),
+                        compressed.size(), width, height, false);
+      double encodeMs = timer.getElapsedMilliseconds();
 
-    // Construct dummy frame
-    std::vector<uint8_t> rgba(width * height * 4);
-    for (uint32_t y = 0; y < height; ++y)
-        for (uint32_t x = 0; x < width; ++x)
-            rgba[4 * (y * width + x) + 1] = (255.0f * x * y) / (width * height) * (y % 100 < 50);
+      if (0 == size)
+        std::cerr << prefix << "Encode error: " << NvPipe_GetError(encoder)
+                  << std::endl;
 
-    std::cout << prefix << "Resolution: " << width << " x " << height << std::endl;
+      // Decode
+      timer.reset();
+      uint64_t r = NvPipe_Decode(decoder, compressed.data(), size,
+                                 decompressed.data(), width, height);
+      double decodeMs = timer.getElapsedMilliseconds();
 
-    std::vector<uint8_t> compressed(rgba.size());
-    std::vector<uint8_t> decompressed(rgba.size());
+      if (0 == r)
+        std::cerr << prefix << "Decode error: " << NvPipe_GetError(decoder)
+                  << std::endl;
 
-    Timer timer;
-
-    // Host memory benchmark
-    {
-        std::cout << std::endl
-                  << prefix << "--- Encode from host memory / Decode to host memory ---" << std::endl;
-        std::cout << prefix << "Frame | Encode (ms) | Decode (ms) | Size (KB)" << std::endl;
-
-        // Create encoder
-        NvPipe *encoder = NvPipe_CreateEncoder(NVPIPE_BGRA32, codec, compression, bitrateMbps * 1000 * 1000, targetFPS);
-        if (!encoder)
-            std::cerr << prefix << "Failed to create encoder: " << NvPipe_GetError(NULL) << std::endl;
-
-        // Create decoder
-        NvPipe *decoder = NvPipe_CreateDecoder(NVPIPE_BGRA32, codec);
-        if (!decoder)
-            std::cerr << prefix << "Failed to create decoder: " << NvPipe_GetError(NULL) << std::endl;
-
-        // A few frames ...
-        for (uint32_t i = 0; i < 10; ++i)
-        {
-            // Encode
-            timer.reset();
-            uint64_t size = NvPipe_Encode(encoder, rgba.data(), width * 4, compressed.data(), compressed.size(), width, height, false);
-            double encodeMs = timer.getElapsedMilliseconds();
-
-            if (0 == size)
-                std::cerr << prefix << "Encode error: " << NvPipe_GetError(encoder) << std::endl;
-
-            // Decode
-            timer.reset();
-            uint64_t r = NvPipe_Decode(decoder, compressed.data(), size, decompressed.data(), width, height);
-            double decodeMs = timer.getElapsedMilliseconds();
-
-            if (0 == r)
-                std::cerr << prefix << "Decode error: " << NvPipe_GetError(decoder) << std::endl;
-
-            double sizeKB = size / 1000.0;
-            std::cout << prefix << std::fixed << std::setprecision(1) << std::setw(5) << i << " | " << std::setw(11) << encodeMs << " | " << std::setw(11) << decodeMs << " | " << std::setw(8) << sizeKB << std::endl;
-        }
-
-        // Clean up
-        NvPipe_Destroy(encoder);
-        NvPipe_Destroy(decoder);
+      double sizeKB = size / 1000.0;
+      std::cout << prefix << std::fixed << std::setprecision(1) << std::setw(5)
+                << i << " | " << std::setw(11) << encodeMs << " | "
+                << std::setw(11) << decodeMs << " | " << std::setw(8) << sizeKB
+                << std::endl;
     }
 
-    // Device memory benchmark
-    {
-        std::cout << std::endl
-                  << prefix << "--- Encode from device memory / Decode to device memory ---" << std::endl;
-        std::cout << prefix << "Frame | Encode (ms) | Decode (ms) | Size (KB)" << std::endl;
+    // Clean up
+    NvPipe_Destroy(encoder);
+    NvPipe_Destroy(decoder);
+  }
 
-        // Create encoder
-        NvPipe *encoder = NvPipe_CreateEncoder(NVPIPE_BGRA32, codec, compression, bitrateMbps * 1000 * 1000, targetFPS);
-        if (!encoder)
-            std::cerr << prefix << "Failed to create encoder: " << NvPipe_GetError(NULL) << std::endl;
+  // Device memory benchmark
+  {
+    std::cout << std::endl
+              << prefix
+              << "--- Encode from device memory / Decode to device memory ---"
+              << std::endl;
+    std::cout << prefix << "Frame | Encode (ms) | Decode (ms) | Size (KB)"
+              << std::endl;
 
-        // Create decoder
-        NvPipe *decoder = NvPipe_CreateDecoder(NVPIPE_BGRA32, codec);
-        if (!decoder)
-            std::cerr << prefix << "Failed to create decoder: " << NvPipe_GetError(NULL) << std::endl;
+    // Create encoder
+    NvPipe *encoder =
+        NvPipe_CreateEncoder(NVPIPE_BGRA32, codec, compression,
+                             bitrateMbps * 1000 * 1000, targetFPS);
+    if (!encoder)
+      std::cerr << prefix
+                << "Failed to create encoder: " << NvPipe_GetError(NULL)
+                << std::endl;
 
-        // Allocate device memory and copy input
-        void *rgbaDevice;
-        cudaMalloc(&rgbaDevice, rgba.size());
-        cudaMemcpy(rgbaDevice, rgba.data(), rgba.size(), cudaMemcpyHostToDevice);
+    // Create decoder
+    NvPipe *decoder = NvPipe_CreateDecoder(NVPIPE_BGRA32, codec);
+    if (!decoder)
+      std::cerr << prefix
+                << "Failed to create decoder: " << NvPipe_GetError(NULL)
+                << std::endl;
 
-        void *decompressedDevice;
-        cudaMalloc(&decompressedDevice, rgba.size());
+    // Allocate device memory and copy input
+    void *rgbaDevice;
+    cudaMalloc(&rgbaDevice, rgba.size());
+    cudaMemcpy(rgbaDevice, rgba.data(), rgba.size(), cudaMemcpyHostToDevice);
 
-        for (uint32_t i = 0; i < 10; ++i)
-        {
-            // Encode
-            timer.reset();
-            uint64_t size = NvPipe_Encode(encoder, rgbaDevice, width * 4, compressed.data(), compressed.size(), width, height, false);
-            double encodeMs = timer.getElapsedMilliseconds();
+    void *decompressedDevice;
+    cudaMalloc(&decompressedDevice, rgba.size());
 
-            if (0 == size)
-                std::cerr << prefix << "Encode error: " << NvPipe_GetError(encoder) << std::endl;
+    for (uint32_t i = 0; i < 10; ++i) {
+      // Encode
+      timer.reset();
+      uint64_t size =
+          NvPipe_Encode(encoder, rgbaDevice, width * 4, compressed.data(),
+                        compressed.size(), width, height, false);
+      double encodeMs = timer.getElapsedMilliseconds();
 
-            // Decode
-            timer.reset();
-            uint64_t r = NvPipe_Decode(decoder, compressed.data(), size, decompressedDevice, width, height);
-            double decodeMs = timer.getElapsedMilliseconds();
+      if (0 == size)
+        std::cerr << prefix << "Encode error: " << NvPipe_GetError(encoder)
+                  << std::endl;
 
-            if (r == size)
-                std::cerr << prefix << "Decode error: " << NvPipe_GetError(decoder) << std::endl;
+      // Decode
+      timer.reset();
+      uint64_t r = NvPipe_Decode(decoder, compressed.data(), size,
+                                 decompressedDevice, width, height);
+      double decodeMs = timer.getElapsedMilliseconds();
 
-            double sizeKB = size / 1000.0;
-            std::cout << prefix << std::fixed << std::setprecision(1) << std::setw(5) << i << " | " << std::setw(11) << encodeMs << " | " << std::setw(11) << decodeMs << " | " << std::setw(8) << sizeKB << std::endl;
-        }
+      if (r == size)
+        std::cerr << prefix << "Decode error: " << NvPipe_GetError(decoder)
+                  << std::endl;
 
-        cudaFree(rgbaDevice);
-        cudaFree(decompressedDevice);
-
-        // Clean up
-        NvPipe_Destroy(encoder);
-        NvPipe_Destroy(decoder);
+      double sizeKB = size / 1000.0;
+      std::cout << prefix << std::fixed << std::setprecision(1) << std::setw(5)
+                << i << " | " << std::setw(11) << encodeMs << " | "
+                << std::setw(11) << decodeMs << " | " << std::setw(8) << sizeKB
+                << std::endl;
     }
+
+    cudaFree(rgbaDevice);
+    cudaFree(decompressedDevice);
+
+    // Clean up
+    NvPipe_Destroy(encoder);
+    NvPipe_Destroy(decoder);
+  }
 }
 
-int main(int argc, char *argv[])
-{
-    pid_t pid = fork();
-    if (pid < 0)
-    {
-        std::cerr << "Failed to fork process" << std::endl;
-        return EXIT_FAILURE;
-    }
-    else if (pid == 0)
-    {
-        test("child - ");
-    }
-    else
-    {
-        int status;
-        test("main  - ");
-        waitpid(pid, &status, 0);
+int main(int argc, char *argv[]) {
+  pid_t pid = fork();
+  if (pid < 0) {
+    std::cerr << "Failed to fork process" << std::endl;
+    return EXIT_FAILURE;
+  } else if (pid == 0) {
+    test("child1 - ");
+  } else {
+    pid_t pid2 = fork();
+    if (pid2 < 0) {
+      std::cerr << "Failed to fork second process" << std::endl;
+      return EXIT_FAILURE;
+    } else if (pid2 == 0) {
+      test("child2 - ");
+    } else {
+      int status;
+      test("main   - ");
+      waitpid(pid, &status, 0);
+      waitpid(pid2, &status, 0);
     }
     return EXIT_SUCCESS;
+  }
 }
