@@ -34,18 +34,31 @@
 
 #include <cuda_runtime_api.h>
 
+constexpr int MAX_CODECS  = 10;
+constexpr uint32_t width = 100;
+constexpr uint32_t height = 100;
+constexpr float bitrateMbps = 1;
+constexpr uint32_t targetFPS = 10;
+
+struct Instance {
+        std::vector<uint8_t> *compressed;
+	uint64_t size;
+        std::vector<uint8_t> *decompressed;
+        NvPipe *encoder;
+        NvPipe *decoder;
+    } instances[MAX_CODECS];
+
 int main(int argc, char *argv[])
 {
-    std::cout << "NvPipe example application: Comparison of using host/device memory." << std::endl
+    std::cout << "NvPipe example application: How many codecs can run parallel?" << std::endl
               << std::endl;
 
-    const uint32_t width = 3840;
-    const uint32_t height = 2160;
+    const uint32_t width = 100;
+    const uint32_t height = 100;
 
     const NvPipe_Codec codec = NVPIPE_H264;
     const NvPipe_Compression compression = NVPIPE_LOSSY;
-    const float bitrateMbps = 32;
-    const uint32_t targetFPS = 90;
+
 
     std::cout << "Resolution: " << width << " x " << height << std::endl;
     std::cout << "Codec: " << (codec == NVPIPE_H264 ? "H.264" : "HEVC") << std::endl;
@@ -60,104 +73,76 @@ int main(int argc, char *argv[])
 
     std::cout << "Resolution: " << width << " x " << height << std::endl;
 
-    std::vector<uint8_t> compressed1(rgba.size());
-    std::vector<uint8_t> decompressed1(rgba.size());
-    std::vector<uint8_t> compressed2(rgba.size());
-    std::vector<uint8_t> decompressed2(rgba.size());
-
     Timer timer;
 
-    // Host memory benchmark
-
+    // Create encoders
     std::cout << std::endl
-              << "--- Encode from host memory / Decode to host memory ---" << std::endl;
-    std::cout << "Frame | Encode (ms) | Decode (ms) | Size (KB)" << std::endl;
+              << "--- Create encoders ---" << std::endl;
+ 
+    for(int i=0;i<MAX_CODECS;i++) {
+ 	instances[i].encoder = NvPipe_CreateEncoder(NVPIPE_BGRA32, codec, compression, bitrateMbps * 1000 * 1000, targetFPS);
+        if (!instances[i].encoder) {
+            std::cout << "Failed to create " << (i+1) << ". encoder: " <<  NvPipe_GetError(NULL) << std::endl;
+	    break;
+        }
+        instances[i].compressed = new std::vector<uint8_t>(rgba.size());
+    }
 
-    // Create encoder
-    NvPipe *encoder1 = NvPipe_CreateEncoder(NVPIPE_BGRA32, codec, compression, bitrateMbps * 1000 * 1000, targetFPS);
-    if (!encoder1)
-        std::cerr << "Failed to create encoder1: " << NvPipe_GetError(NULL) << std::endl;
 
     // Create decoder
-    NvPipe *decoder1 = NvPipe_CreateDecoder(NVPIPE_BGRA32, codec);
-    if (!decoder1)
-        std::cerr << "Failed to create decoder1: " << NvPipe_GetError(NULL) << std::endl;
+    std::cout << std::endl
+              << "--- Create decoders ---" << std::endl;
+ 
+    for(int i=0;i<MAX_CODECS;i++) {
+ 	instances[i].decoder = NvPipe_CreateDecoder(NVPIPE_BGRA32, codec);
+	    if (!instances[i].decoder) {
+                  std::cout << "Failed to create " << (i+1) << ". decoder: " << NvPipe_GetError(NULL) << std::endl;
+		  break;
+	    }
+	    instances[i].decompressed = new std::vector<uint8_t>(rgba.size());
+    }
 
     // Device memory benchmark
     std::cout << std::endl
               << "--- Encode from device memory / Decode to device memory ---" << std::endl;
     std::cout << "Frame | Encode (ms) | Decode (ms) | Size (KB)" << std::endl;
 
-    // Create encoder
-    NvPipe *encoder2 = NvPipe_CreateEncoder(NVPIPE_BGRA32, codec, compression, bitrateMbps * 1000 * 1000, targetFPS);
-    if (!encoder2)
-        std::cerr << "Failed to create encoder2: " << NvPipe_GetError(NULL) << std::endl;
-
-    // Create decoder
-    NvPipe *decoder2 = NvPipe_CreateDecoder(NVPIPE_BGRA32, codec);
-    if (!decoder2)
-        std::cerr << "Failed to create decoder2: " << NvPipe_GetError(NULL) << std::endl;
-
-    // Allocate device memory and copy input
-    void *rgbaDevice;
-    cudaMalloc(&rgbaDevice, rgba.size());
-    cudaMemcpy(rgbaDevice, rgba.data(), rgba.size(), cudaMemcpyHostToDevice);
-
-    void *decompressedDevice;
-    cudaMalloc(&decompressedDevice, rgba.size());
-
     // A few frames ...
     for (uint32_t i = 0; i < 10; ++i)
     {
         // Encode
         timer.reset();
-        uint64_t size1 = NvPipe_Encode(encoder1, rgba.data(), width * 4, compressed1.data(), compressed1.size(), width, height, false);
-        double encodeMs1 = timer.getElapsedMilliseconds();
 
-        if (0 == size1)
-            std::cerr << "Encode error: " << NvPipe_GetError(encoder1) << std::endl;
-
-        // Encode
-        timer.reset();
-        uint64_t size2 = NvPipe_Encode(encoder2, rgbaDevice, width * 4, compressed2.data(), compressed2.size(), width, height, false);
-        double encodeMs2 = timer.getElapsedMilliseconds();
-
-        if (0 == size2)
-            std::cerr << "Encode error: " << NvPipe_GetError(encoder2) << std::endl;
-
+	for(int i=0;i<MAX_CODECS && instances[i].encoder;i++) {
+	        instances[i].size = NvPipe_Encode(instances[i].encoder, rgba.data(), width * 4, instances[i].compressed->data(), instances[i].compressed->size(), width, height, false);
+		   if (0 == instances[i].size)
+		            std::cerr << "Encode error at " << i << ": " << NvPipe_GetError(instances[i].encoder) << std::endl;
+	}
+        double encodeMs = timer.getElapsedMilliseconds();
+   
         // Decode
         timer.reset();
-        uint64_t r = NvPipe_Decode(decoder1, compressed1.data(), size1, decompressed1.data(), width, height);
+
+	for(int i=0;i<MAX_CODECS && instances[i].decoder;i++) {
+		int j=i;
+		if(instances[i].encoder == NULL)
+			j=0;
+		uint64_t r = NvPipe_Decode(instances[i].decoder, instances[j].compressed->data(), instances[j].size, instances[i].decompressed->data(), width, height);
+                if (0 == r)
+                    std::cerr << "Decode error at " << i << ": " << NvPipe_GetError(instances[i].decoder) << std::endl;
+	}
         double decodeMs = timer.getElapsedMilliseconds();
 
-        if (0 == r)
-            std::cerr << "Decode error: " << NvPipe_GetError(decoder1) << std::endl;
 
-        double sizeKB = size1 / 1000.0;
-        std::cout << std::fixed << std::setprecision(1) << std::setw(5) << i << " | " << std::setw(11) << encodeMs1 << " | " << std::setw(11) << decodeMs << " | " << std::setw(8) << sizeKB << std::endl;
-
-        // Decode
-        timer.reset();
-        r = NvPipe_Decode(decoder2, compressed2.data(), size2, decompressedDevice, width, height);
-        decodeMs = timer.getElapsedMilliseconds();
-
-        if (0 == r)
-            std::cerr << "Decode error: " << NvPipe_GetError(decoder2) << std::endl;
-
-        sizeKB = size2 / 1000.0;
-        std::cout << std::fixed << std::setprecision(1) << std::setw(5) << i << " | " << std::setw(11) << encodeMs2 << " | " << std::setw(11) << decodeMs << " | " << std::setw(8) << sizeKB << std::endl;
+        double sizeKB = instances[0].size / 1000.0;
+        std::cout << std::fixed << std::setprecision(1) << std::setw(5) << i << " | " << std::setw(11) << encodeMs << " | " << std::setw(11) << decodeMs << " | " << std::setw(8) << sizeKB << std::endl;
     }
 
     // Clean up
-    NvPipe_Destroy(encoder1);
-    NvPipe_Destroy(decoder1);
-
-    cudaFree(rgbaDevice);
-    cudaFree(decompressedDevice);
-
-    // Clean up
-    NvPipe_Destroy(encoder2);
-    NvPipe_Destroy(decoder2);
+	for(int i=0;i<MAX_CODECS && instances[i].encoder;i++) 
+    		NvPipe_Destroy(instances[i].encoder);
+	for(int i=0;i<MAX_CODECS && instances[i].decoder;i++) 
+    		NvPipe_Destroy(instances[i].decoder);
 
     return 0;
 }
