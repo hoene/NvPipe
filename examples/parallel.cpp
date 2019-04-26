@@ -32,9 +32,10 @@
 #include <iostream>
 #include <vector>
 
+#include <cuda.h>
 #include <cuda_runtime_api.h>
 
-constexpr int MAX_CODECS  = 10;
+constexpr int MAX_CODECS  = 4;
 constexpr uint32_t width = 100;
 constexpr uint32_t height = 100;
 constexpr float bitrateMbps = 1;
@@ -94,27 +95,26 @@ int main(int argc, char *argv[])
 
     for(int i=0;i<MAX_CODECS;i++) {
 
-	 result = cudaSetDevice(device);
+	cudaDeviceSynchronize();
+
+	device = i % device_count;
+	result = cudaSetDevice(device);
+
+	CUcontext cudaContext;
+        cuCtxGetCurrent(&cudaContext);
+        		 std::cout << "current context " << cudaContext << std::endl;
+
          if (result != cudaSuccess) {
             std::cerr << "cudaSetDevice error " << NvPipe_GetError(NULL) << std::endl;
          }
 
  	instances[i].encoder = NvPipe_CreateEncoder(NVPIPE_BGRA32, codec, compression, bitrateMbps * 1000 * 1000, targetFPS);
         if (!instances[i].encoder) {
-	    device++;
-	    if(device < device_count) {
-		 result = cudaSetDevice(device);
-	         if (result != cudaSuccess) {
-        	    std::cerr << "cudaSetDevice error " << NvPipe_GetError(NULL) << std::endl;
-	         }
-	
- 		  instances[i].encoder = NvPipe_CreateEncoder(NVPIPE_BGRA32, codec, compression, bitrateMbps * 1000 * 1000, targetFPS);
-             }
-	}
-        if (!instances[i].encoder) {
 		 std::cout << "Failed to create " << (i+1) << ". encoder on graphic card " << device << ": " <<  NvPipe_GetError(NULL) << std::endl;
 		break;
         }
+        else
+		 std::cout << "Created encoder " << (i+1) << ". on graphic card " << i % device_count << ": " <<  NvPipe_GetError(NULL) << std::endl;
         instances[i].compressed = new std::vector<uint8_t>(rgba.size());
     }
 
