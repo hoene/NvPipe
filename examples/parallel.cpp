@@ -65,6 +65,17 @@ int main(int argc, char *argv[])
     if (compression == NVPIPE_LOSSY)
         std::cout << "Bitrate: " << bitrateMbps << " Mbps @ " << targetFPS << " Hz" << std::endl;
 
+/*
+   * query the number of graphic cards 
+   */
+  int device_count = 1;
+  cudaError_t result = cudaGetDeviceCount(&device_count);
+  if (result != cudaSuccess) {
+    std::cerr << "cudaGetDeviceCount error " << NvPipe_GetError(NULL) << std::endl;
+  }
+        std::cout << "Graphic cards: " << device_count << std::endl;
+
+
     // Construct dummy frame
     std::vector<uint8_t> rgba(width * height * 4);
     for (uint32_t y = 0; y < height; ++y)
@@ -79,11 +90,30 @@ int main(int argc, char *argv[])
     std::cout << std::endl
               << "--- Create encoders ---" << std::endl;
  
+    int device = 0;
+
     for(int i=0;i<MAX_CODECS;i++) {
+
+	 result = cudaSetDevice(device);
+         if (result != cudaSuccess) {
+            std::cerr << "cudaSetDevice error " << NvPipe_GetError(NULL) << std::endl;
+         }
+
  	instances[i].encoder = NvPipe_CreateEncoder(NVPIPE_BGRA32, codec, compression, bitrateMbps * 1000 * 1000, targetFPS);
         if (!instances[i].encoder) {
-            std::cout << "Failed to create " << (i+1) << ". encoder: " <<  NvPipe_GetError(NULL) << std::endl;
-	    break;
+	    device++;
+	    if(device < device_count) {
+		 result = cudaSetDevice(device);
+	         if (result != cudaSuccess) {
+        	    std::cerr << "cudaSetDevice error " << NvPipe_GetError(NULL) << std::endl;
+	         }
+	
+ 		  instances[i].encoder = NvPipe_CreateEncoder(NVPIPE_BGRA32, codec, compression, bitrateMbps * 1000 * 1000, targetFPS);
+             }
+	}
+        if (!instances[i].encoder) {
+		 std::cout << "Failed to create " << (i+1) << ". encoder on graphic card " << device << ": " <<  NvPipe_GetError(NULL) << std::endl;
+		break;
         }
         instances[i].compressed = new std::vector<uint8_t>(rgba.size());
     }
